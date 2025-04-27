@@ -1,6 +1,6 @@
 # HalfswordAnalyzer
 
-**HalfswordAnalyzer** is a custom map handler for the game [**Halfsword**](https://store.steampowered.com/app/2585370/Halfsword/), enabling **custom map loading** during gameplay via a single `GameObject` spawned with `SpawnActor`.  
+**HalfswordAnalyzer** is a custom map handler for the game [**Halfsword**](https://store.steampowered.com/app/2397300/Half_Sword/), enabling **custom map loading** during gameplay via a single `GameObject` spawned with `SpawnActor`.  
 The system tracks all available custom maps and provides a simple **ImGui** interface to select and load them.
 
 > Current Game Version Info (as of April 28, 2025):  
