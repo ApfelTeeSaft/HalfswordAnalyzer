@@ -74,11 +74,11 @@ namespace HalfswordAnalyzer {
                         }
                     }
 
-                    Sleep(1000);
+                    Sleep(500);
                     waitAttempts++;
 
                     if (waitAttempts % 5 == 0) {
-                        Utils::Logger::Info("Still waiting for game to initialize... (%d seconds)", waitAttempts);
+                        Utils::Logger::Info("Still waiting for game to initialize... (%d seconds)", waitAttempts / 2);
 
                         Utils::Logger::Info("- Engine: %s", SDK::UEngine::GetEngine() ? "Found" : "Not found");
                         Utils::Logger::Info("- World: %s", SDK::UWorld::GetWorld() ? "Found" : "Not found");
@@ -111,7 +111,7 @@ namespace HalfswordAnalyzer {
                 Utils::Logger::Info("Game window found: 0x%p", g_GameWindow);
             }
 
-            
+
             Sleep(5000);
             if (!Hooks::Initialize()) {
                 Utils::Logger::Error("Failed to initialize hooks");
@@ -137,6 +137,7 @@ namespace HalfswordAnalyzer {
             Utils::Logger::Info("Press F5 in-game to dump level information");
             Utils::Logger::Info("Press F6 in-game to manually record player position");
             Utils::Logger::Info("Press F9 in-game to clear console logs");
+            Utils::Logger::Info("Press INSERT at any time to access the Level Selector");
             Utils::Logger::Info("Player position is automatically recorded on map changes");
 
             return true;

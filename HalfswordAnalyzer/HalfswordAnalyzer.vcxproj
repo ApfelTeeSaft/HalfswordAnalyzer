@@ -144,6 +144,7 @@
     <ClInclude Include="Core\Core.h" />
     <ClInclude Include="Core\Hooks.h" />
     <ClInclude Include="Features\ConsoleManager.h" />
+    <ClInclude Include="Features\ImGuiManager.h" />
     <ClInclude Include="Features\LevelAnalyzer.h" />
     <ClInclude Include="Features\PositionTracker.h" />
     <ClInclude Include="Utils\Logger.h" />
@@ -151,12 +152,20 @@
     <ClInclude Include="Utils\StringUtils.h" />
   </ItemGroup>
   <ItemGroup>
+    <ClCompile Include="backends\imgui_impl_dx11.cpp" />
+    <ClCompile Include="backends\imgui_impl_win32.cpp" />
     <ClCompile Include="Core\Core.cpp" />
     <ClCompile Include="Core\Hooks.cpp" />
     <ClCompile Include="dllmain.cpp" />
     <ClCompile Include="Features\ConsoleManager.cpp" />
+    <ClCompile Include="Features\ImGuiManager.cpp" />
     <ClCompile Include="Features\LevelAnalyzer.cpp" />
     <ClCompile Include="Features\PositionTracker.cpp" />
+    <ClCompile Include="imgui.cpp" />
+    <ClCompile Include="imgui_demo.cpp" />
+    <ClCompile Include="imgui_draw.cpp" />
+    <ClCompile Include="imgui_tables.cpp" />
+    <ClCompile Include="imgui_widgets.cpp" />
     <ClCompile Include="SDK\SDK\Basic.cpp" />
     <ClCompile Include="SDK\SDK\CoreUObject_functions.cpp" />
     <ClCompile Include="SDK\SDK\Engine_functions.cpp" />
