@@ -30,13 +30,10 @@ namespace HalfswordAnalyzer {
             void WINAPI ExecuteCommandLists_Hook(ID3D12CommandQueue* queue, UINT NumCommandLists, ID3D12CommandList* const* ppCommandLists) {
                 g_OriginalExecuteCommandLists(queue, NumCommandLists, ppCommandLists);
 
-                if (queue && queue->GetDesc().Type == D3D12_COMMAND_LIST_TYPE_DIRECT) {
-                    Features::ImGuiManager::CaptureCommandQueue(queue);
-                }
             }
 
             HRESULT WINAPI Present_Hook(IDXGISwapChain3* pSwapChain, UINT SyncInterval, UINT Flags) {
-                return Features::ImGuiManager::Present_Hook(pSwapChain, SyncInterval, Flags);
+                return g_OriginalPresent(pSwapChain, SyncInterval, Flags);
             }
 
             HRESULT WINAPI D3D12CreateDevice_Hook(IUnknown* pAdapter, D3D_FEATURE_LEVEL MinimumFeatureLevel, REFIID riid, void** ppDevice) {
@@ -45,78 +42,6 @@ namespace HalfswordAnalyzer {
                 if (SUCCEEDED(hr) && ppDevice && *ppDevice) {
                     Utils::Logger::Info("D3D12CreateDevice hook called, device created: 0x%p", *ppDevice);
 
-                    ID3D12Device* device = static_cast<ID3D12Device*>(*ppDevice);
-                    Features::ImGuiManager::CaptureDevice(device);
-
-                    IDXGIFactory4* factory = nullptr;
-                    if (SUCCEEDED(CreateDXGIFactory1(IID_PPV_ARGS(&factory)))) {
-                        IDXGIAdapter* adapter = nullptr;
-                        if (SUCCEEDED(factory->EnumAdapters(0, &adapter))) {
-                            WNDCLASSEX wc = { sizeof(WNDCLASSEX), CS_CLASSDC, DefWindowProc, 0L, 0L, GetModuleHandle(NULL), NULL, NULL, NULL, NULL, L"DummyWindow", NULL };
-                            RegisterClassEx(&wc);
-                            HWND hWnd = CreateWindow(wc.lpszClassName, L"Dummy", WS_OVERLAPPEDWINDOW, 0, 0, 100, 100, NULL, NULL, wc.hInstance, NULL);
-
-                            DXGI_SWAP_CHAIN_DESC desc = {};
-                            desc.BufferCount = 2;
-                            desc.BufferDesc.Width = 100;
-                            desc.BufferDesc.Height = 100;
-                            desc.BufferDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
-                            desc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
-                            desc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
-                            desc.OutputWindow = hWnd;
-                            desc.SampleDesc.Count = 1;
-                            desc.Windowed = TRUE;
-
-                            D3D12_COMMAND_QUEUE_DESC queueDesc = {};
-                            queueDesc.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
-                            ID3D12CommandQueue* commandQueue = nullptr;
-                            device->CreateCommandQueue(&queueDesc, IID_PPV_ARGS(&commandQueue));
-
-                            IDXGISwapChain* swapChain = nullptr;
-                            if (SUCCEEDED(factory->CreateSwapChain(commandQueue, &desc, &swapChain))) {
-                                IDXGISwapChain3* swapChain3 = nullptr;
-                                if (SUCCEEDED(swapChain->QueryInterface(IID_PPV_ARGS(&swapChain3)))) {
-                                    g_PresentAddress = (void*)(*((void***)swapChain3))[8]; // Present should be at index 8 in the vtable
-
-                                    if (g_PresentAddress) {
-                                        Utils::Logger::Info("Found Present function at 0x%p", g_PresentAddress);
-                                        g_OriginalPresent = (Present_t)g_PresentAddress;
-                                        DetourTransactionBegin();
-                                        DetourUpdateThread(GetCurrentThread());
-                                        DetourAttach(&(PVOID&)g_OriginalPresent, Present_Hook);
-                                        DetourTransactionCommit();
-                                        Utils::Logger::Info("Present hook installed");
-                                    }
-
-                                    swapChain3->Release();
-                                }
-
-                                swapChain->Release();
-                            }
-
-                            if (commandQueue) {
-                                g_ExecuteCommandListsAddress = (void*)(*((void***)commandQueue))[10]; // ExecuteCommandLists should be at index 10 in the vtable
-
-                                if (g_ExecuteCommandListsAddress) {
-                                    Utils::Logger::Info("Found ExecuteCommandLists function at 0x%p", g_ExecuteCommandListsAddress);
-                                    g_OriginalExecuteCommandLists = (ExecuteCommandLists_t)g_ExecuteCommandListsAddress;
-                                    DetourTransactionBegin();
-                                    DetourUpdateThread(GetCurrentThread());
-                                    DetourAttach(&(PVOID&)g_OriginalExecuteCommandLists, ExecuteCommandLists_Hook);
-                                    DetourTransactionCommit();
-                                    Utils::Logger::Info("ExecuteCommandLists hook installed");
-                                }
-
-                                commandQueue->Release();
-                            }
-
-                            DestroyWindow(hWnd);
-                            UnregisterClass(wc.lpszClassName, wc.hInstance);
-                        }
-
-                        if (adapter) adapter->Release();
-                        factory->Release();
-                    }
                 }
 
                 return hr;

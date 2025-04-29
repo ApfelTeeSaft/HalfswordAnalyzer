@@ -5,19 +5,26 @@
 #include <vector>
 #include <nlohmann/json.hpp>
 #include "../SDK/SDK.hpp"
-#include <dxgi1_4.h>
-#include <d3d12.h>
 
 struct ImGuiContext;
 struct ImVec2;
 struct ImVec4;
+struct ID3D11Device;
+struct ID3D11DeviceContext;
+struct IDXGISwapChain;
+struct ID3D11RenderTargetView;
 
 namespace HalfswordAnalyzer {
     namespace Features {
+        static void CreateRenderTarget();
+        static void CleanupRenderTarget();
+        static bool CreateDeviceD3D(HWND hWnd);
+        static void CleanupDeviceD3D();
+
         class ImGuiManager {
         public:
             /**
-             * Initializes the ImGui system
+             * Initializes the ImGui system with a separate window
              * @return True if initialization was successful
              */
             static bool Initialize();
@@ -28,31 +35,15 @@ namespace HalfswordAnalyzer {
             static void Shutdown();
 
             /**
-             * Present hook callback for rendering ImGui
-             * @param pSwapChain The game's swap chain
-             * @param SyncInterval Sync interval
-             * @param Flags Presentation flags
-             * @return HRESULT from original function
+             * Shows or hides the ImGui window
+             * @param visible Whether the window should be visible
              */
-            static HRESULT WINAPI Present_Hook(IDXGISwapChain3* pSwapChain, UINT SyncInterval, UINT Flags);
+            static void SetVisible(bool visible);
 
             /**
-             * Capture the D3D12 device for ImGui initialization
-             * @param device The D3D12 device to capture
+             * Toggles the window visibility
              */
-            static void CaptureDevice(ID3D12Device* device);
-
-            /**
-             * Capture the D3D12 command queue for ImGui rendering
-             * @param commandQueue The D3D12 command queue to capture
-             */
-            static void CaptureCommandQueue(ID3D12CommandQueue* commandQueue);
-
-            /**
-             * Capture the DXGI swap chain for ImGui rendering
-             * @param swapChain The DXGI swap chain to capture
-             */
-            static void CaptureSwapChain(IDXGISwapChain3* swapChain);
+            static void ToggleVisibility();
 
             /**
              * Checks if ImGui is initialized
@@ -68,6 +59,8 @@ namespace HalfswordAnalyzer {
 
         private:
             static bool s_Initialized;
+            static bool s_Visible;
+            static bool s_Running;
             static bool s_ShowDemo;
             static bool s_CoreInitialized;
             static bool s_GameInitialized;
@@ -75,21 +68,10 @@ namespace HalfswordAnalyzer {
             static bool s_InitScreenClosed;
             static bool s_ShowLevelSelector;
             static HWND s_GameWindow;
+            static HWND s_ImGuiWindow;
             static WNDPROC s_OriginalWndProc;
             static ImGuiContext* s_ImGuiContext;
-
-            static ID3D12Device* s_Device;
-            static ID3D12CommandQueue* s_CommandQueue;
-            static ID3D12DescriptorHeap* s_DescriptorHeap;
-            static ID3D12GraphicsCommandList* s_CommandList;
-            static ID3D12CommandAllocator* s_CommandAllocator;
-            static IDXGISwapChain3* s_SwapChain;
-            static UINT s_FrameIndex;
-            static ID3D12Resource* s_RenderTargets[2];
-            static UINT s_BackBufferCount;
-            static bool s_DeviceCaptured;
-            static bool s_CommandQueueCaptured;
-            static bool s_SwapChainCaptured;
+            static HANDLE s_RenderThread;
 
             static nlohmann::json s_LevelInfoJson;
             static std::vector<std::string> s_InitializationMessages;
@@ -102,24 +84,65 @@ namespace HalfswordAnalyzer {
             };
             static std::vector<InitStage> s_InitStages;
 
+            /**
+             * Creates the external ImGui window
+             * @return True if creation was successful
+             */
+            static bool CreateExternalWindow();
+
+            /**
+             * Thread procedure for rendering the window
+             * @param lpParam Thread parameter
+             * @return Thread result
+             */
+            static DWORD WINAPI RenderThreadProc(LPVOID lpParam);
+
+            /**
+             * Window procedure for the ImGui window
+             */
             static LRESULT CALLBACK WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
-            static bool InitializeImGui();
-            static bool SetupRenderState();
-            static bool CreateResources();
+            /**
+             * Window procedure for the game window (to capture INSERT key)
+             */
+            static LRESULT CALLBACK GameWndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
-            static void RenderInitializationScreen();
+            /**
+             * Renders the main interface
+             */
             static void RenderMainInterface();
+
+            /**
+             * Renders the level selector tab
+             */
             static void RenderLevelSelector();
-            static void SwitchLevel(const std::string& levelName);
+
+            /**
+             * Renders the position tracker tab
+             */
+            static void RenderPositionTab();
+
+            /**
+             * Renders the settings tab
+             */
+            static void RenderSettingsTab();
+
+            /**
+             * Collect level data from the game
+             */
             static void CollectLevelData();
 
-            static void DrawModernButton(const char* label, bool* clicked, const ImVec2& size);
-            static void DrawProgressBar(float progress, const ImVec2& size);
-            static void PushModernStyle();
-            static void PopModernStyle();
+            /**
+             * Switch to a specific level in the game
+             * @param levelName The name of the level to switch to
+             */
+            static void SwitchLevel(const std::string& levelName);
 
-            static void TryInitialize();
+            /**
+             * Style helpers for ImGui
+             */
+            static void PushModernStyle();
+            static void DrawModernButton(const char* label, bool* clicked, const ImVec2& size);
         };
     }
 }
