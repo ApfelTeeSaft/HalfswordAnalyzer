@@ -8,10 +8,12 @@
 #include "../imgui.h"
 #include "../imgui_internal.h"
 #include "../backends/imgui_impl_win32.h"
-#include "../backends/imgui_impl_dx11.h"
-#include <d3d11.h>
+#include "../backends/imgui_impl_dx12.h"
+#include <d3d12.h>
+#include <dxgi1_4.h>
 
-#pragma comment(lib, "d3d11.lib")
+#pragma comment(lib, "d3d12.lib")
+#pragma comment(lib, "dxgi.lib")
 
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
@@ -27,10 +29,20 @@ namespace HalfswordAnalyzer {
         HWND ImGuiManager::s_GameWindow = NULL;
         WNDPROC ImGuiManager::s_OriginalWndProc = NULL;
         ImGuiContext* ImGuiManager::s_ImGuiContext = NULL;
-        ID3D11Device* ImGuiManager::s_Device = NULL;
-        ID3D11DeviceContext* ImGuiManager::s_DeviceContext = NULL;
-        IDXGISwapChain* ImGuiManager::s_SwapChain = NULL;
-        ID3D11RenderTargetView* ImGuiManager::s_RenderTargetView = NULL;
+
+        ID3D12Device* ImGuiManager::s_Device = NULL;
+        ID3D12CommandQueue* ImGuiManager::s_CommandQueue = NULL;
+        ID3D12DescriptorHeap* ImGuiManager::s_DescriptorHeap = NULL;
+        ID3D12GraphicsCommandList* ImGuiManager::s_CommandList = NULL;
+        ID3D12CommandAllocator* ImGuiManager::s_CommandAllocator = NULL;
+        IDXGISwapChain3* ImGuiManager::s_SwapChain = NULL;
+        UINT ImGuiManager::s_FrameIndex = 0;
+        ID3D12Resource* ImGuiManager::s_RenderTargets[2] = { NULL, NULL };
+        UINT ImGuiManager::s_BackBufferCount = 2;
+        bool ImGuiManager::s_DeviceCaptured = false;
+        bool ImGuiManager::s_CommandQueueCaptured = false;
+        bool ImGuiManager::s_SwapChainCaptured = false;
+
         nlohmann::json ImGuiManager::s_LevelInfoJson = nlohmann::json::array();
         std::vector<std::string> ImGuiManager::s_InitializationMessages;
         float ImGuiManager::s_InitProgress = 0.0f;
@@ -44,26 +56,147 @@ namespace HalfswordAnalyzer {
             {"Level Data Collection", "Waiting", false}
         };
 
+        void ImGuiManager::CaptureDevice(ID3D12Device* device) {
+            if (!s_Device && device) {
+                s_Device = device;
+                device->AddRef();
+                s_DeviceCaptured = true;
+                Utils::Logger::Info("D3D12 Device captured: 0x%p", device);
+                TryInitialize();
+            }
+        }
+
+        void ImGuiManager::CaptureCommandQueue(ID3D12CommandQueue* queue) {
+            if (!s_CommandQueue && queue && queue->GetDesc().Type == D3D12_COMMAND_LIST_TYPE_DIRECT) {
+                s_CommandQueue = queue;
+                queue->AddRef();
+                s_CommandQueueCaptured = true;
+                Utils::Logger::Info("D3D12 CommandQueue captured: 0x%p", queue);
+                TryInitialize();
+            }
+        }
+
+        void ImGuiManager::CaptureSwapChain(IDXGISwapChain3* swapChain) {
+            if (!s_SwapChain && swapChain) {
+                s_SwapChain = swapChain;
+                swapChain->AddRef();
+                DXGI_SWAP_CHAIN_DESC desc;
+                swapChain->GetDesc(&desc);
+                s_BackBufferCount = desc.BufferCount;
+
+                s_SwapChainCaptured = true;
+                Utils::Logger::Info("DXGI SwapChain captured: 0x%p (Buffer Count: %d)", swapChain, s_BackBufferCount);
+                TryInitialize();
+            }
+        }
+
+        HRESULT STDMETHODCALLTYPE ImGuiManager::Present_Hook(IDXGISwapChain3* pSwapChain, UINT SyncInterval, UINT Flags) {
+            if (!s_SwapChain) {
+                CaptureSwapChain(pSwapChain);
+            }
+
+            if (s_Initialized && pSwapChain == s_SwapChain) {
+                s_FrameIndex = pSwapChain->GetCurrentBackBufferIndex();
+
+                s_CommandAllocator->Reset();
+
+                s_CommandList->Reset(s_CommandAllocator, NULL);
+
+                D3D12_RESOURCE_BARRIER barrier = {};
+                barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+                barrier.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
+                barrier.Transition.pResource = s_RenderTargets[s_FrameIndex];
+                barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_PRESENT;
+                barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_RENDER_TARGET;
+                barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+                s_CommandList->ResourceBarrier(1, &barrier);
+
+                ImGui_ImplDX12_NewFrame();
+                ImGui_ImplWin32_NewFrame();
+                ImGui::NewFrame();
+
+                s_CoreInitialized = Core::IsHotkeyActive();
+                s_GameInitialized = (SDK::UWorld::GetWorld() != nullptr);
+
+                if (s_CoreInitialized && !s_InitStages[1].completed) {
+                    s_InitStages[1].status = "Completed";
+                    s_InitStages[1].completed = true;
+                    s_InitProgress = 0.3f;
+                    s_InitializationMessages.push_back("Core initialized successfully");
+                }
+
+                if (s_GameInitialized && !s_InitStages[2].completed) {
+                    s_InitStages[2].status = "Completed";
+                    s_InitStages[2].completed = true;
+                    s_InitProgress = 0.5f;
+                    s_InitializationMessages.push_back("Game SDK detected successfully");
+                }
+
+                if (s_CoreInitialized && !s_InitStages[3].completed) {
+                    s_InitStages[3].status = "Completed";
+                    s_InitStages[3].completed = true;
+                    s_InitProgress = 0.7f;
+                    s_InitializationMessages.push_back("Hooks installed successfully");
+                }
+
+                if (s_GameInitialized && !s_InitStages[4].completed && Features::ConsoleManager::IsConsoleEnabled()) {
+                    s_InitStages[4].status = "Completed";
+                    s_InitStages[4].completed = true;
+                    s_InitProgress = 0.9f;
+                    s_InitializationMessages.push_back("UE Console setup successfully");
+                }
+
+                if (s_GameInitialized && !s_LevelDataCollected) {
+                    CollectLevelData();
+                    s_LevelDataCollected = true;
+                    s_InitStages[5].status = "Completed";
+                    s_InitStages[5].completed = true;
+                    s_InitProgress = 1.0f;
+                    s_InitializationMessages.push_back("Level data collected successfully");
+                }
+
+                if (s_LevelDataCollected && !s_InitScreenClosed) {
+                    RenderInitializationScreen();
+                }
+                else if (s_ShowLevelSelector && s_InitScreenClosed) {
+                    RenderLevelSelector();
+                }
+                else if (s_InitScreenClosed) {
+                    RenderMainInterface();
+                }
+
+                if (s_ShowDemo) {
+                    ImGui::ShowDemoWindow(&s_ShowDemo);
+                }
+
+                ImGui::Render();
+
+                s_CommandList->SetDescriptorHeaps(1, &s_DescriptorHeap);
+                ImGui_ImplDX12_RenderDrawData(ImGui::GetDrawData(), s_CommandList);
+
+                barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
+                barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_PRESENT;
+                s_CommandList->ResourceBarrier(1, &barrier);
+
+                s_CommandList->Close();
+
+                ID3D12CommandList* ppCommandLists[] = { s_CommandList };
+                s_CommandQueue->ExecuteCommandLists(_countof(ppCommandLists), ppCommandLists);
+            }
+
+            return S_OK;
+        }
+
         bool ImGuiManager::Initialize() {
             if (s_Initialized) {
                 return true;
             }
 
-            Utils::Logger::Info("Initializing ImGui Manager...");
+            Utils::Logger::Info("Initializing ImGui Manager for DirectX 12...");
 
             s_GameWindow = Core::GetGameWindow();
             if (!s_GameWindow) {
                 Utils::Logger::Error("Failed to get game window for ImGui initialization");
-                return false;
-            }
-
-            if (!InitializeDirectX()) {
-                Utils::Logger::Error("Failed to initialize DirectX for ImGui");
-                return false;
-            }
-
-            if (!InitializeImGui()) {
-                Utils::Logger::Error("Failed to initialize ImGui context");
                 return false;
             }
 
@@ -79,12 +212,68 @@ namespace HalfswordAnalyzer {
             s_InitStages[0].completed = true;
             s_InitProgress = 0.1f;
 
-            s_InitializationMessages.push_back("ImGui Manager initialized successfully");
+            s_InitializationMessages.push_back("ImGui Manager initialization started");
             s_InitializationMessages.push_back("Press INSERT at any time to access Level Selector");
 
-            Utils::Logger::Info("ImGui Manager initialized successfully");
-            Utils::Logger::Info("Press INSERT at any time to access Level Selector");
+            Utils::Logger::Info("ImGui Manager initialized - waiting for DirectX 12 resources");
+            return true;
+        }
+
+        void ImGuiManager::TryInitialize() {
+            if (s_Initialized || !s_DeviceCaptured || !s_CommandQueueCaptured) {
+                return;
+            }
+
+            Utils::Logger::Info("All D3D12 resources captured, initializing ImGui...");
+
+            if (!CreateResources()) {
+                Utils::Logger::Error("Failed to create ImGui resources");
+                return;
+            }
+            if (!InitializeImGui()) {
+                Utils::Logger::Error("Failed to initialize ImGui");
+                return;
+            }
+
             s_Initialized = true;
+            Utils::Logger::Info("ImGui initialized with DirectX 12 successfully");
+            s_InitializationMessages.push_back("ImGui initialized with DirectX 12 successfully");
+        }
+
+        bool ImGuiManager::CreateResources() {
+            D3D12_DESCRIPTOR_HEAP_DESC desc = {};
+            desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+            desc.NumDescriptors = 1;
+            desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+            if (FAILED(s_Device->CreateDescriptorHeap(&desc, IID_PPV_ARGS(&s_DescriptorHeap)))) {
+                Utils::Logger::Error("Failed to create descriptor heap");
+                return false;
+            }
+
+            if (FAILED(s_Device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&s_CommandAllocator)))) {
+                Utils::Logger::Error("Failed to create command allocator");
+                return false;
+            }
+
+            if (FAILED(s_Device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, s_CommandAllocator, NULL, IID_PPV_ARGS(&s_CommandList)))) {
+                Utils::Logger::Error("Failed to create command list");
+                return false;
+            }
+
+            s_CommandList->Close();
+
+            if (s_SwapChain && s_BackBufferCount > 0) {
+                for (UINT i = 0; i < s_BackBufferCount; i++) {
+                    if (s_RenderTargets[i]) {
+                        s_RenderTargets[i]->Release();
+                        s_RenderTargets[i] = NULL;
+                    }
+                    if (FAILED(s_SwapChain->GetBuffer(i, IID_PPV_ARGS(&s_RenderTargets[i])))) {
+                        Utils::Logger::Warning("Failed to get render target %d", i);
+                    }
+                }
+            }
+
             return true;
         }
 
@@ -97,83 +286,34 @@ namespace HalfswordAnalyzer {
                 SetWindowLongPtr(s_GameWindow, GWLP_WNDPROC, (LONG_PTR)s_OriginalWndProc);
             }
 
-            ImGui_ImplDX11_Shutdown();
+            ImGui_ImplDX12_Shutdown();
             ImGui_ImplWin32_Shutdown();
-            ImGui::DestroyContext(s_ImGuiContext);
+            if (s_ImGuiContext) {
+                ImGui::DestroyContext(s_ImGuiContext);
+                s_ImGuiContext = NULL;
+            }
 
-            if (s_RenderTargetView) s_RenderTargetView->Release();
-            if (s_SwapChain) s_SwapChain->Release();
-            if (s_DeviceContext) s_DeviceContext->Release();
-            if (s_Device) s_Device->Release();
+            if (s_DescriptorHeap) { s_DescriptorHeap->Release(); s_DescriptorHeap = NULL; }
+            if (s_CommandList) { s_CommandList->Release(); s_CommandList = NULL; }
+            if (s_CommandAllocator) { s_CommandAllocator->Release(); s_CommandAllocator = NULL; }
+
+            for (UINT i = 0; i < s_BackBufferCount; i++) {
+                if (s_RenderTargets[i]) {
+                    s_RenderTargets[i]->Release();
+                    s_RenderTargets[i] = NULL;
+                }
+            }
+
+            if (s_Device) { s_Device->Release(); s_Device = NULL; }
+            if (s_CommandQueue) { s_CommandQueue->Release(); s_CommandQueue = NULL; }
+            if (s_SwapChain) { s_SwapChain->Release(); s_SwapChain = NULL; }
+
+            s_DeviceCaptured = false;
+            s_CommandQueueCaptured = false;
+            s_SwapChainCaptured = false;
 
             Utils::Logger::Info("ImGui Manager shutdown complete");
             s_Initialized = false;
-        }
-
-        bool ImGuiManager::InitializeDirectX() {
-            RECT rect;
-            GetClientRect(s_GameWindow, &rect);
-            UINT width = rect.right - rect.left;
-            UINT height = rect.bottom - rect.top;
-
-            DXGI_SWAP_CHAIN_DESC swapChainDesc = {};
-            swapChainDesc.BufferDesc.Width = width;
-            swapChainDesc.BufferDesc.Height = height;
-            swapChainDesc.BufferDesc.RefreshRate.Numerator = 60;
-            swapChainDesc.BufferDesc.RefreshRate.Denominator = 1;
-            swapChainDesc.BufferDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
-            swapChainDesc.SampleDesc.Count = 1;
-            swapChainDesc.SampleDesc.Quality = 0;
-            swapChainDesc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
-            swapChainDesc.BufferCount = 1;
-            swapChainDesc.OutputWindow = s_GameWindow;
-            swapChainDesc.Windowed = TRUE;
-            swapChainDesc.SwapEffect = DXGI_SWAP_EFFECT_DISCARD;
-
-            UINT createDeviceFlags = 0;
-#ifdef _DEBUG
-            createDeviceFlags |= D3D11_CREATE_DEVICE_DEBUG;
-#endif
-
-            D3D_FEATURE_LEVEL featureLevel;
-            const D3D_FEATURE_LEVEL featureLevelArray[1] = { D3D_FEATURE_LEVEL_11_0 };
-
-            HRESULT hr = D3D11CreateDeviceAndSwapChain(
-                NULL, D3D_DRIVER_TYPE_HARDWARE, NULL, createDeviceFlags,
-                featureLevelArray, 1, D3D11_SDK_VERSION,
-                &swapChainDesc, &s_SwapChain, &s_Device, &featureLevel, &s_DeviceContext);
-
-            if (FAILED(hr)) {
-                Utils::Logger::Error("D3D11CreateDeviceAndSwapChain failed with error code: 0x%X", hr);
-                return false;
-            }
-
-            ID3D11Texture2D* backBuffer = NULL;
-            hr = s_SwapChain->GetBuffer(0, __uuidof(ID3D11Texture2D), (LPVOID*)&backBuffer);
-            if (FAILED(hr)) {
-                Utils::Logger::Error("Failed to get back buffer from swap chain: 0x%X", hr);
-                return false;
-            }
-
-            hr = s_Device->CreateRenderTargetView(backBuffer, NULL, &s_RenderTargetView);
-            backBuffer->Release();
-            if (FAILED(hr)) {
-                Utils::Logger::Error("Failed to create render target view: 0x%X", hr);
-                return false;
-            }
-
-            s_DeviceContext->OMSetRenderTargets(1, &s_RenderTargetView, NULL);
-
-            D3D11_VIEWPORT viewport;
-            viewport.Width = (float)width;
-            viewport.Height = (float)height;
-            viewport.MinDepth = 0.0f;
-            viewport.MaxDepth = 1.0f;
-            viewport.TopLeftX = 0;
-            viewport.TopLeftY = 0;
-            s_DeviceContext->RSSetViewports(1, &viewport);
-
-            return true;
         }
 
         bool ImGuiManager::InitializeImGui() {
@@ -190,8 +330,11 @@ namespace HalfswordAnalyzer {
                 return false;
             }
 
-            if (!ImGui_ImplDX11_Init(s_Device, s_DeviceContext)) {
-                Utils::Logger::Error("Failed to initialize ImGui for DirectX 11");
+            if (!ImGui_ImplDX12_Init(s_Device, s_BackBufferCount,
+                DXGI_FORMAT_R8G8B8A8_UNORM, s_DescriptorHeap,
+                s_DescriptorHeap->GetCPUDescriptorHandleForHeapStart(),
+                s_DescriptorHeap->GetGPUDescriptorHandleForHeapStart())) {
+                Utils::Logger::Error("Failed to initialize ImGui for DirectX 12");
                 return false;
             }
 
@@ -203,77 +346,9 @@ namespace HalfswordAnalyzer {
             return true;
         }
 
-        void ImGuiManager::Render() {
-            if (!s_Initialized) {
-                return;
-            }
-
-            ImGui_ImplDX11_NewFrame();
-            ImGui_ImplWin32_NewFrame();
-            ImGui::NewFrame();
-
-            s_CoreInitialized = Core::IsHotkeyActive();
-            s_GameInitialized = (SDK::UWorld::GetWorld() != nullptr);
-
-            if (s_CoreInitialized && !s_InitStages[1].completed) {
-                s_InitStages[1].status = "Completed";
-                s_InitStages[1].completed = true;
-                s_InitProgress = 0.3f;
-                s_InitializationMessages.push_back("Core initialized successfully");
-            }
-
-            if (s_GameInitialized && !s_InitStages[2].completed) {
-                s_InitStages[2].status = "Completed";
-                s_InitStages[2].completed = true;
-                s_InitProgress = 0.5f;
-                s_InitializationMessages.push_back("Game SDK detected successfully");
-            }
-
-            if (s_CoreInitialized && !s_InitStages[3].completed) {
-                s_InitStages[3].status = "Completed";
-                s_InitStages[3].completed = true;
-                s_InitProgress = 0.7f;
-                s_InitializationMessages.push_back("Hooks installed successfully");
-            }
-
-            if (s_GameInitialized && !s_InitStages[4].completed && Features::ConsoleManager::IsConsoleEnabled()) {
-                s_InitStages[4].status = "Completed";
-                s_InitStages[4].completed = true;
-                s_InitProgress = 0.9f;
-                s_InitializationMessages.push_back("UE Console setup successfully");
-            }
-
-            if (s_GameInitialized && !s_LevelDataCollected) {
-                CollectLevelData();
-                s_LevelDataCollected = true;
-                s_InitStages[5].status = "Completed";
-                s_InitStages[5].completed = true;
-                s_InitProgress = 1.0f;
-                s_InitializationMessages.push_back("Level data collected successfully");
-            }
-
-            if (s_LevelDataCollected && !s_InitScreenClosed) {
-                RenderInitializationScreen();
-            }
-            else if (s_ShowLevelSelector && s_InitScreenClosed) {
-                RenderLevelSelector();
-            }
-            else if (s_InitScreenClosed) {
-                RenderMainInterface();
-            }
-
-            if (s_ShowDemo) {
-                ImGui::ShowDemoWindow(&s_ShowDemo);
-            }
-
-            ImGui::Render();
-            s_DeviceContext->OMSetRenderTargets(1, &s_RenderTargetView, NULL);
-            ImVec4 clearColor(0.0f, 0.0f, 0.0f, 0.0f);
-            s_DeviceContext->ClearRenderTargetView(s_RenderTargetView, (float*)&clearColor);
-            ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
-            s_SwapChain->Present(1, 0);
+        bool ImGuiManager::SetupRenderState() {
+            return true;
         }
-
         void ImGuiManager::RenderInitializationScreen() {
             RECT windowRect;
             GetClientRect(s_GameWindow, &windowRect);
@@ -281,14 +356,11 @@ namespace HalfswordAnalyzer {
                 static_cast<float>(windowRect.right - windowRect.left),
                 static_cast<float>(windowRect.bottom - windowRect.top)
             );
-
             ImGui::SetNextWindowPos(ImVec2(0, 0));
             ImGui::SetNextWindowSize(windowSize);
-
             ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.0f, 0.0f, 0.0f, 0.25f));
             ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
             ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
-
             if (ImGui::Begin("##InitScreen", nullptr,
                 ImGuiWindowFlags_NoTitleBar |
                 ImGuiWindowFlags_NoResize |
@@ -299,42 +371,31 @@ namespace HalfswordAnalyzer {
                 ImGuiWindowFlags_NoNavFocus |
                 ImGuiWindowFlags_NoBringToFrontOnFocus |
                 ImGuiWindowFlags_NoFocusOnAppearing)) {
-
                 ImGui::SetCursorPos(ImVec2(10, 10));
                 ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.7f, 0.7f), "made with <3 by apfelteesaft");
-
                 ImVec2 contentSize(windowSize.x * 0.6f, windowSize.y * 0.7f);
                 ImGui::SetCursorPos(ImVec2(
                     (windowSize.x - contentSize.x) * 0.5f,
                     (windowSize.y - contentSize.y) * 0.5f
                 ));
-
                 ImGui::BeginChild("InitContent", contentSize, true);
-
                 ImGui::PushFont(ImGui::GetIO().Fonts->Fonts[0]);
                 ImGui::SetCursorPosX((contentSize.x - ImGui::CalcTextSize("HALFSWORD ANALYZER").x) * 0.5f);
                 ImGui::TextColored(ImVec4(0.0f, 0.8f, 1.0f, 1.0f), "HALFSWORD ANALYZER");
                 ImGui::PopFont();
-
                 ImGui::Spacing();
                 ImGui::Spacing();
-
                 ImGui::SetCursorPosX((contentSize.x - ImGui::CalcTextSize("Initialization Status").x) * 0.5f);
                 ImGui::TextColored(ImVec4(1.0f, 1.0f, 1.0f, 0.8f), "Initialization Status");
-
                 ImGui::Spacing();
                 ImGui::Spacing();
-
                 ImGui::SetCursorPosX(contentSize.x * 0.1f);
                 DrawProgressBar(s_InitProgress, ImVec2(contentSize.x * 0.8f, 24));
-
                 ImGui::Spacing();
                 ImGui::Spacing();
-
                 for (const auto& stage : s_InitStages) {
                     ImGui::TextColored(ImVec4(0.8f, 0.8f, 0.8f, 1.0f), "%s:", stage.name.c_str());
                     ImGui::SameLine(contentSize.x * 0.6f);
-
                     if (stage.completed) {
                         ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.0f, 1.0f), "%s", stage.status.c_str());
                     }
@@ -658,14 +719,6 @@ namespace HalfswordAnalyzer {
                 });
         }
 
-        bool ImGuiManager::IsInitialized() {
-            return s_Initialized;
-        }
-
-        nlohmann::json& ImGuiManager::GetLevelInfoJson() {
-            return s_LevelInfoJson;
-        }
-
         LRESULT CALLBACK ImGuiManager::WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             if (ImGui_ImplWin32_WndProcHandler(hWnd, msg, wParam, lParam)) {
                 return true;
@@ -782,6 +835,14 @@ namespace HalfswordAnalyzer {
 
         void ImGuiManager::PopModernStyle() {
             ImGui::GetIO().FontGlobalScale = 1.0f;
+        }
+
+        bool ImGuiManager::IsInitialized() {
+            return s_Initialized;
+        }
+
+        nlohmann::json& ImGuiManager::GetLevelInfoJson() {
+            return s_LevelInfoJson;
         }
     }
 }

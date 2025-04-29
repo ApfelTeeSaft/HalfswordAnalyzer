@@ -2,6 +2,7 @@
 #include "Hooks.h"
 #include "../Features/ConsoleManager.h"
 #include "../Features/PositionTracker.h"
+#include "../Features/ImGuiManager.h"
 #include "../Utils/Logger.h"
 #include "../Utils/Memory.h"
 
@@ -122,6 +123,10 @@ namespace HalfswordAnalyzer {
                 Utils::Logger::Warning("Failed to enable in-game console");
             }
 
+            if (!Features::ImGuiManager::Initialize()) {
+                Utils::Logger::Warning("Failed to initialize ImGui manager");
+            }
+
             if (!Features::PositionTracker::Initialize()) {
                 Utils::Logger::Warning("Failed to initialize position tracker");
             }
@@ -151,6 +156,7 @@ namespace HalfswordAnalyzer {
                 g_UpdateThread = nullptr;
             }
 
+            Features::ImGuiManager::Shutdown();
             Hooks::Shutdown();
 
             Utils::Logger::Info("Core shutdown complete");

@@ -5,14 +5,12 @@
 #include <vector>
 #include <nlohmann/json.hpp>
 #include "../SDK/SDK.hpp"
+#include <dxgi1_4.h>
+#include <d3d12.h>
 
 struct ImGuiContext;
 struct ImVec2;
 struct ImVec4;
-struct ID3D11Device;
-struct ID3D11DeviceContext;
-struct IDXGISwapChain;
-struct ID3D11RenderTargetView;
 
 namespace HalfswordAnalyzer {
     namespace Features {
@@ -30,10 +28,31 @@ namespace HalfswordAnalyzer {
             static void Shutdown();
 
             /**
-             * Renders the ImGui interface
-             * Call this every frame
+             * Present hook callback for rendering ImGui
+             * @param pSwapChain The game's swap chain
+             * @param SyncInterval Sync interval
+             * @param Flags Presentation flags
+             * @return HRESULT from original function
              */
-            static void Render();
+            static HRESULT WINAPI Present_Hook(IDXGISwapChain3* pSwapChain, UINT SyncInterval, UINT Flags);
+
+            /**
+             * Capture the D3D12 device for ImGui initialization
+             * @param device The D3D12 device to capture
+             */
+            static void CaptureDevice(ID3D12Device* device);
+
+            /**
+             * Capture the D3D12 command queue for ImGui rendering
+             * @param commandQueue The D3D12 command queue to capture
+             */
+            static void CaptureCommandQueue(ID3D12CommandQueue* commandQueue);
+
+            /**
+             * Capture the DXGI swap chain for ImGui rendering
+             * @param swapChain The DXGI swap chain to capture
+             */
+            static void CaptureSwapChain(IDXGISwapChain3* swapChain);
 
             /**
              * Checks if ImGui is initialized
@@ -58,10 +77,20 @@ namespace HalfswordAnalyzer {
             static HWND s_GameWindow;
             static WNDPROC s_OriginalWndProc;
             static ImGuiContext* s_ImGuiContext;
-            static ID3D11Device* s_Device;
-            static ID3D11DeviceContext* s_DeviceContext;
-            static IDXGISwapChain* s_SwapChain;
-            static ID3D11RenderTargetView* s_RenderTargetView;
+
+            static ID3D12Device* s_Device;
+            static ID3D12CommandQueue* s_CommandQueue;
+            static ID3D12DescriptorHeap* s_DescriptorHeap;
+            static ID3D12GraphicsCommandList* s_CommandList;
+            static ID3D12CommandAllocator* s_CommandAllocator;
+            static IDXGISwapChain3* s_SwapChain;
+            static UINT s_FrameIndex;
+            static ID3D12Resource* s_RenderTargets[2];
+            static UINT s_BackBufferCount;
+            static bool s_DeviceCaptured;
+            static bool s_CommandQueueCaptured;
+            static bool s_SwapChainCaptured;
+
             static nlohmann::json s_LevelInfoJson;
             static std::vector<std::string> s_InitializationMessages;
             static float s_InitProgress;
@@ -75,24 +104,22 @@ namespace HalfswordAnalyzer {
 
             static LRESULT CALLBACK WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
-            static bool InitializeDirectX();
-
             static bool InitializeImGui();
+            static bool SetupRenderState();
+            static bool CreateResources();
 
             static void RenderInitializationScreen();
-
             static void RenderMainInterface();
-
             static void RenderLevelSelector();
-
             static void SwitchLevel(const std::string& levelName);
-
             static void CollectLevelData();
 
             static void DrawModernButton(const char* label, bool* clicked, const ImVec2& size);
             static void DrawProgressBar(float progress, const ImVec2& size);
             static void PushModernStyle();
             static void PopModernStyle();
+
+            static void TryInitialize();
         };
     }
 }
