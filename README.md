@@ -1,6 +1,6 @@
 # HalfswordAnalyzer
 
-**HalfswordAnalyzer** is a custom map handler for the game [**Halfsword**](https://store.steampowered.com/app/2397300/Half_Sword/), enabling **custom map loading** during gameplay via a single `GameObject` spawned with `SpawnActor`.  
+**HalfswordAnalyzer** is a custom map handler for the game [**Halfsword**](https://store.steampowered.com/app/2397300/Half_Sword/), enabling **custom map loading** during gameplay via a Object Iteration that checks fo Objects of type `ULevel::StaticClass`.
 The system tracks all available custom maps and provides a simple **ImGui** interface to select and load them.
 
 > Current Game Version Info (as of April 28, 2025):  
@@ -12,47 +12,35 @@ The system tracks all available custom maps and provides a simple **ImGui** inte
 ## Features
 
 - 🔹 **Custom Map Loading**: Load custom maps.
-- 🔹 **Single Actor Management**: A `SpawnActor` instance manages all map references.
 - 🔹 **ImGui Integration**: Select and load maps with an in-game menu.
-- 🔹 **Custom Map Support**: Easily add new maps by dropping definition files into the designated folder.
+- 🔹 **Custom Map Support**: Easily add new maps by dropping pak files in the Games Content.
 
 ---
 
 ## How It Works
 
-- A **custom `.pak` file** provides a **GameObject** tailored for HalfswordAnalyzer.
-- This GameObject **references a specific folder** inside the game's Content directory where **map definition assets** are placed.
-- Upon being spawned, the object **scans that folder** for assets of type `Level`, and **registers them** for loading through the ImGui menu.
-- A **custom DLL** handles spawning the GameObject at runtime via `SpawnActor`.
+- A **custom `.dll` file** provides a **Object Enumerator** tailored for HalfswordAnalyzer.
+- This DLL **enumerates through all objects** inside the game's memory.
+- Upon being executed, the code **scans all objects** for assets of type `ULevel::StaticClass`, and **registers them** for loading through the ImGui menu.
 
 ---
 
 ## Requirements
 
-- ✅ The **custom `.pak` file** containing the GameObject and necessary folder structure (once i have it done).
 - ✅ The **HalfswordAnalyzer DLL**, which must replace:
   ```
   Half Sword Demo\Engine\Binaries\ThirdParty\NVIDIA\NVaftermath\Win64\GFSDK_Aftermath_Lib.x64.dll
   ```
-  Replacing this DLL ensures the analyzer can spawn the GameObject as early and reliably as possible during the game's startup.
+  Replacing this DLL ensures the analyzer can initialize without requiring injection.
 
 ---
 
 ## Usage
 
-1. Install the custom `.pak` file into the game's `Paks` directory (pak is not released yet).
-2. Replace the existing `GFSDK_Aftermath_Lib.x64.dll` with the HalfswordAnalyzer DLL.
-3. Launch the game normally.
-4. The custom GameObject will automatically scan for available maps (once i get the pak ready).
-5. Open the ImGui menu to browse and load maps (once i have imgui setup).
-
----
-
-## Planned Features
-
-- [ ] Display additional map metadata (author name, description, etc.)
-- [ ] Add "Favorites" for quick-access maps
-- [ ] Implement actual ImGUI Interface (currently everything is being handled by the Developer Console)
+1. Replace the existing `GFSDK_Aftermath_Lib.x64.dll` with the HalfswordAnalyzer DLL.
+2. Launch the game normally.
+3. The custom DLL will automatically scan for available maps.
+4. Open the ImGui menu to browse and load maps (INSERT toggles the Menu).
 
 ---
 
